@@ -1,0 +1,18 @@
+---
+title: "hw622_1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+open libraries
+
+```{r}
+library(tidymodels)
+library(tidyverse)
+```
+
+
+
