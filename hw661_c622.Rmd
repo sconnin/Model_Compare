@@ -14,5 +14,73 @@ library(tidymodels)
 library(tidyverse)
 ```
 
+load data from github
+
+```{r}
+small.r<-read_csv('https://raw.githubusercontent.com/sconnin/Model_Compare/main/5000%20HRA%20Records.csv')
+large.r<-read_csv('https://raw.githubusercontent.com/sconnin/Model_Compare/main/500000%20HRA%20Records.csv')
+```
+
+data overview 
+
+```{r}
+
+#first five rows
+
+head(small.r)
+
+# data types
+
+str(small.r)
+
+# dataframe summary
+
+summary(small.r)
+summary(large.r)
 
 
+```
+Data Key
+
+Education
+1 'Below College'
+2 'College'
+3 'Bachelor'
+4 'Master'
+5 'Doctor'
+
+EnvironmentSatisfaction
+1 'Low'
+2 'Medium'
+3 'High'
+4 'Very High'
+
+JobInvolvement
+1 'Low'
+2 'Medium'
+3 'High'
+4 'Very High'
+
+JobSatisfaction
+1 'Low'
+2 'Medium'
+3 'High'
+4 'Very High'
+
+PerformanceRating
+1 'Low'
+2 'Good'
+3 'Excellent'
+4 'Outstanding'
+
+RelationshipSatisfaction
+1 'Low'
+2 'Medium'
+3 'High'
+4 'Very High'
+
+WorkLifeBalance
+1 'Bad'
+2 'Good'
+3 'Better'
+4 'Best'
