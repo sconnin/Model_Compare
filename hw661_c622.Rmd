@@ -12,6 +12,15 @@ open libraries
 ```{r}
 library(tidymodels)
 library(tidyverse)
+library(dlookr)
+library(janitor)
+library(flextable)
+library(magrittr)
+library(viridis)
+library(patchwork)
+library(GGally)
+#library(rpart)
+#library(rpart.plot)
 ```
 
 load data from github
@@ -21,66 +30,484 @@ small.r<-read_csv('https://raw.githubusercontent.com/sconnin/Model_Compare/main/
 large.r<-read_csv('https://raw.githubusercontent.com/sconnin/Model_Compare/main/500000%20HRA%20Records.csv')
 ```
 
+Goal: classification model to predict attrition
+
+
 data overview 
 
 ```{r}
 
-#first five rows
-
-head(small.r)
-
-# data types
+# inspect data types
 
 str(small.r)
 
-# dataframe summary
+# convert select cols to factor
 
-summary(small.r)
-summary(large.r)
+names <- c('Attrition', 'BusinessTravel', 'Department', 'EducationField', 'Gender', 'JobRole', 'MaritalStatus', 'Over18', 'OverTime', 'Education','EnvironmentSatisfaction','JobInvolvement', 'JobSatisfaction','PerformanceRating', 'RelationshipSatisfaction', 'WorkLifeBalance')
+
+small.r[,names] <- map(small.r[,names] , factor)
+large.r[,names] <- map(large.r[,names] , factor)
+
+# relevel factors
+
+rlvl<-function(df){
+  
+  df%>%mutate(Education = recode_factor(Education, '1'='Below College', '2'='College', '3'='Bachelor', '4'='Master', '5'='Doctor'))%>%
+  mutate(EnvironmentSatisfaction = recode_factor(EnvironmentSatisfaction, '1'='Low', '2'='Medium', '3'='High', '4'='Very High'))%>%
+  mutate(JobInvolvement = recode_factor(JobInvolvement, '1'='Low', '2'='Medium', '3'='High', '4'='Very High'))%>%
+  mutate(JobSatisfaction = recode_factor(JobSatisfaction, '1'='Low', '2'='Medium', '3'='High', '4'='Very High'))%>%
+  mutate(PerformanceRating = recode_factor(PerformanceRating, '1'='Low', '2'='Good', '3'='Excellent', '4'='Outstanding'))%>%
+  mutate(RelationshipSatisfaction = recode_factor(RelationshipSatisfaction, '1'='Low', '2'='Medium', '3'='High', '4'='Very High'))%>%
+  mutate(WorkLifeBalance = recode_factor(WorkLifeBalance, '1'='Bad', '2'='Good', '3'='Better', '4'='Best'))
+}
+
+small.r<-rlvl(small.r)
+large.r<-rlvl(large.r)
+
+# move target var to col 1
+
+small.r%<>%
+  relocate(attrition, .before = age)
+
+large.r%<>%
+  relocate(attrition, .before=age)
+
+```
+
+
+```{r}
+
+# basic cleanup
+
+clean<-function(df){
+    
+    df%>%
+    clean_names%>% # initial clean of col names
+    remove_empty(c("rows", "cols"))%>%  # remove any empty rows and cols
+    distinct()    # remove duplicate rows
+}
+
+small.r<-clean(small.r)
+large.r<-clean(large.r)
+
+# check for NA -- none
+
+map(small.r, ~sum(is.na(.)))
+map(large.r, ~sum(is.na(.)))
+```
+
+
+```{r}
+
+# summarize numeric variables
+
+large.r%>%
+    diagnose_numeric()%>%
+    dplyr::select(variables, min, mean, median, max, zero, minus, outlier)%>%
+    flextable()%>%
+    set_caption("Summary Statistics for Large Dataset")
+
+#summarize factor variables
+
+large.r%>%
+    diagnose_category()%>%
+    flextable()%>%
+    set_caption("Summary Statistics for Categorical Variables")
+```
+Pairwise comparisons for numerics 
+
+```{r}
+
+
+
+cor.tabl<-function(df, titles){
+    df%>%
+    filter_if(is.numeric, all_vars((.) != 0))%>%
+    correlate()%>%
+    filter(coef_corr > .6 | coef_corr < -.6)%>% # set thresholds to limit output 
+    arrange(desc(coef_corr))%>%
+    flextable()%>%
+    set_caption(titles)
+}
+
+
+cor.tabl(large.r, "Pairwise Correlation: Numerical Covariates: Large Dataset")
+
+```
+Note: years_at_company corr coef > .70 with years_in_current_role, 	
+years_since_last_promotion, years_with_curr_manager
+
+```{r}
+
+# drop redundant features
+
+large.r%<>%
+  select(!c(monthly_rate, years_since_last_promotion))
+
+small.r%<>%
+  select(!c(monthly_rate, years_since_last_promotion))
+
+```
+
+Eval numerical distributions
+
+```{r}
+
+# Subset numerical variables
+
+num_box<-select_if(small.r, is.numeric)
+
+# Plot using boxplots
+
+response = names(small.r)[1] #target_flag (needs to be fct for these plots)
+response = purrr::set_names(response)
+
+explain <- names(small.r)[2:17] #explanatory variables
+explain = purrr::set_names(explain)
+
+box_fun = function(.x) {
+    ggplot(small.r, aes_string(x = .x, y = 'attrition') ) +
+    geom_boxplot(aes(fill = attrition, alpha = 0.4), outlier.color =
+    'red', show.legend = FALSE)+
+    scale_fill_viridis(discrete = TRUE, option = "E")+
+    coord_flip()+
+    theme_classic()
+}
+
+box_plots<-map(explain, ~box_fun(.x)) #creates a list of plots using purrr
+
+plot(reduce(box_plots,`+`)) # layout with patchwork
+
+```
+eval categorical vars
+
+```{r}
+# Subset categorical variables into a df of factor vars
+
+mosaic<-small.r%>% #subset target_flag as factor
+    dplyr::select(where(is.factor))
+
+target <- all_of(names(small.r)[1]) # set name for target_flag
+predictors <- all_of(names(mosaic)[2:15])
+
+#generate mosaic plots with purrr and dlookr
+
+(plots<-predictors%>%map(function(predictors) mosaic%>%target_by(target)%>%relate(predictors)%>%plot()))
+```
+
+Modeling
+
+```{r}
+
+set.seed(5345459)
+
+# create random data split
+
+data_split <- initial_split(small.r, prop = .75, strata = attrition)
+
+# create train and test sets from split
+
+train_data <- training(data_split)
+test_data <- testing(daata_split)
+
 
 
 ```
-Data Key
 
-Education
-1 'Below College'
-2 'College'
-3 'Bachelor'
-4 'Master'
-5 'Doctor'
+Build modeling recipe
 
-EnvironmentSatisfaction
-1 'Low'
-2 'Medium'
-3 'High'
-4 'Very High'
 
-JobInvolvement
-1 'Low'
-2 'Medium'
-3 'High'
-4 'Very High'
+```{r}
 
-JobSatisfaction
-1 'Low'
-2 'Medium'
-3 'High'
-4 'Very High'
+# pre-model processing using recipes
 
-PerformanceRating
-1 'Low'
-2 'Good'
-3 'Excellent'
-4 'Outstanding'
+attr_recipe<-
+  recipe(attrition ~., data=small.r)%>%
+  step_normalize(all_numeric())%>% # center and scale numerical vars%>%
+  step_dummy(all_nominal, -attrition)%>% #convert factor cols to numeric
+  step_zv(all_numeric())%>% # remove numeric vars that have zero variance (single unique value)
+  step_corr(all_predictors(), threshold = 0.7, method = 'spearman') # remove predictors that have large correlations with other covariates
 
-RelationshipSatisfaction
-1 'Low'
-2 'Medium'
-3 'High'
-4 'Very High'
+# review updates to covariates
+  
+summary(attr_recipe)
 
-WorkLifeBalance
-1 'Bad'
-2 'Good'
-3 'Better'
-4 'Best'
+# visualize numerical data
+
+
+
+```
+
+# Build validation set
+
+```{r}
+set.seed(111)
+
+cv_folds<-
+  vfold_cv(train_data, 
+           v=10,
+           strata= attrition)
+```
+
+# Specify Models
+
+```{r}
+
+# Random Forest
+
+library(ranger)
+
+rf <- rand_forest()%>%
+  set_engine('ranger', importance='impurity')%>% # impurity will provide variable importance scores
+  set_mode('classification')
+
+# K-nearest neighbors
+
+knn<- 
+  nearest_neighbor(neighbors = 4)%>% # can tune this part
+  set_engine('kknn')%>%
+  set_mode('classification')
+
+# Logistic Regression
+
+logit<-
+  logistic_reg()%>%
+  set_engine(engine = 'glm')%>%
+  set_mode('classification')
+
+
+
+
+```
+
+# create workflow to combine recipe and models
+
+```{r}
+
+#workflow for random forest
+
+random.wf<- 
+  add_recipe(attr_recipe)%>%
+  add_model(rf)
+
+# workflow for KNN
+
+knn.wf<- 
+  add_recipe(attr_recipe)%>%
+  add_model(knn)
+
+#workflow for logistical model
+
+logit.wf <-
+  workflow()%>%
+  add_recipe(attr_recipe)%>%
+  add_model(logit)
+
+
+```
+
+# Evaluate models using cross validation
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+attr_recipe %>% 
+  select(age, 
+         daily_rate, 
+         distance_from_home,
+         employee_count, 
+         employee_number,
+         hourly_rate, 
+         job_level, 
+         monthly_income, 
+         num_companies_worked, 
+         percent_salary_hike,
+         standard_hours, 
+         stock_option_level, 
+         total_working_years, 
+         training_times_last_year, 
+         years_in_current_role, 
+         years_with_curr_manager)%>% 
+  ggscatmat(corMethod = "spearman",
+            alpha=0.2)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+#split into test/train set
+
+set.seed(3190)
+sample_set <- sample(nrow(large.r), round(nrow(large.r)*0.75), replace = FALSE)
+large.train <- large.r[sample_set, ]
+large.test <- large.r[-sample_set, ]
+
+#check class distribution of original, train, and test sets
+round(prop.table(table(select(large.r, attrition), exclude = NULL)), 2) * 100  #education
+
+```
+```{r}
+
+#build model via rpart package
+large_model <- rpart(attrition ~ .,
+                         method = "class",
+                         data = large.train
+                          )
+
+#display decision tree
+rpart.plot(large_model)
+
+
+
+
+```
+
+small set
+
+```{r}
+
+#split into test/train set
+
+set.seed(3190)
+sample <- sample(nrow(small.r), round(nrow(small.r)*0.75), replace = FALSE)
+small.train <- small.r[sample_set, ]
+small.test <- small.r[-sample_set, ]
+
+```
+
+```{r}
+#build model via rpart package
+small_model <- rpart(attrition ~ .,
+                         method = "class",
+                         data = small.train
+                          )
+
+#display decision tree
+rpart.plot(small_model)
+```
+Predict on test set. 
+```{r}
+small_sales_pred <- predict(small_sales_model, small_sales_test, type = "class")
+small_sales_pred_table <- table(small_sales_test$Order.Priority, small_sales_pred)
+small_sales_pred_table
+```
+
+```{r}
+#calculate accuracy
+sum(diag(small_sales_pred_table)) / nrow(small_sales_test)
+```
+
